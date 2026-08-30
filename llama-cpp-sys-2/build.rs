@@ -24,6 +24,15 @@ enum TargetOs {
     Apple(AppleVariant),
     Linux,
     Android,
+    // wasm32-wasip1 / wasm32-wasip2 — component-model targets built
+    // with wasi-sdk. Compiler + sysroot are supplied via
+    // WASI_SDK_PREFIX (WASI_SDK_PREFIX/bin/clang). Native GPU
+    // linkage (cuda, metal, vulkan, dawn) is not applicable; the
+    // webgpu backend is expected to be provided by a caller-side
+    // C shim that imports browser:webgpu@0.8.0. Match arms elsewhere
+    // treat Wasi as Linux-shaped for library naming + lack of
+    // Windows/Apple/Android platform quirks.
+    Wasi,
 }
 
 macro_rules! debug_log {
@@ -83,6 +92,11 @@ fn parse_target_os() -> Result<(TargetOs, String), String> {
         Ok((TargetOs::Android, target))
     } else if target.contains("linux") {
         Ok((TargetOs::Linux, target))
+    } else if target.starts_with("wasm32-wasi")
+        || target == "wasm32-wasip1"
+        || target == "wasm32-wasip2"
+    {
+        Ok((TargetOs::Wasi, target))
     } else {
         Err(target)
     }
@@ -110,7 +124,7 @@ fn extract_lib_names(out_dir: &Path, build_shared_libs: bool, target_os: &Target
                 "*.a"
             }
         }
-        TargetOs::Linux | TargetOs::Android => {
+        TargetOs::Linux | TargetOs::Android | TargetOs::Wasi => {
             if build_shared_libs {
                 "*.so"
             } else {
@@ -155,7 +169,7 @@ fn extract_lib_assets(out_dir: &Path, target_os: &TargetOs) -> Vec<PathBuf> {
     let shared_lib_pattern = match target_os {
         TargetOs::Windows(_) => "*.dll",
         TargetOs::Apple(_) => "*.dylib",
-        TargetOs::Linux | TargetOs::Android => "*.so",
+        TargetOs::Linux | TargetOs::Android | TargetOs::Wasi => "*.so",
     };
 
     let shared_libs_dir = match target_os {
@@ -194,7 +208,7 @@ fn library_file_exists(
                 (&["lib"], &["a"])
             }
         }
-        TargetOs::Linux | TargetOs::Android => {
+        TargetOs::Linux | TargetOs::Android | TargetOs::Wasi => {
             if build_shared_libs {
                 (&["lib"], &["so"])
             } else {
@@ -568,7 +582,9 @@ fn main() {
 
     debug_log!("Bindings Created");
 
-    if cfg!(feature = "common") {
+    // Skip wrapper_common.cpp on wasi-p2 — transitively pulls in
+    // common/ headers that reach cpp-httplib (net/if.h).
+    if cfg!(feature = "common") && !matches!(target_os, TargetOs::Wasi) {
         let mut common_wrapper_build = cc::Build::new();
         common_wrapper_build
             .cpp(true)
@@ -610,13 +626,27 @@ fn main() {
     config.define("LLAMA_BUILD_APP", "OFF");
     config.define(
         "LLAMA_BUILD_COMMON",
-        if cfg!(feature = "common") {
+        if cfg!(feature = "common") && !matches!(target_os, TargetOs::Wasi) {
             "ON"
         } else {
+            // wasi-p2 forces this OFF regardless of feature —
+            // LLAMA_BUILD_COMMON pulls in vendor/cpp-httplib which
+            // includes <net/if.h> (unsupported on wasi-p2). Downstreams
+            // that need the JSON→grammar helper on wasi should use a
+            // Rust-native equivalent.
             "OFF"
         },
     );
     config.define("LLAMA_CURL", "OFF");
+
+    // wasi-p2 target-specific: ggml.c includes <signal.h> which the
+    // wasi-p2 sysroot only supports under emulation. Add the compile
+    // define + the corresponding link lib.
+    if matches!(target_os, TargetOs::Wasi) {
+        config.cflag("-D_WASI_EMULATED_SIGNAL");
+        config.cxxflag("-D_WASI_EMULATED_SIGNAL");
+        println!("cargo:rustc-link-lib=static=wasi-emulated-signal");
+    }
 
     // Pass CMAKE_ environment variables down to CMake
     for (key, value) in env::vars() {
