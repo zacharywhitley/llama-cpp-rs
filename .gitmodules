@@ -1,3 +1,10 @@
 [submodule "llama-cpp-sys-2/llama.cpp"]
 	path = llama-cpp-sys-2/llama.cpp
-	url = https://github.com/ggml-org/llama.cpp
+	url = https://github.com/zacharywhitley/llama.cpp
+	# cognition-fork carries the `cognition/webgpu-header-only`
+	# branch: a local delta on top of upstream ggml-org/llama.cpp
+	# that adds `GGML_WEBGPU_HEADER_ONLY` to
+	# ggml/src/ggml-webgpu/CMakeLists.txt. See
+	# ../cognition/crates/cognition-webgpu-c-shim/scripts/spike-d1.sh
+	# for the end-to-end Path D build recipe that consumes it.
+	# Upstream `origin` was https://github.com/ggml-org/llama.cpp.
