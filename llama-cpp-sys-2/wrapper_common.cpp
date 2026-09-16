@@ -15,7 +15,13 @@
 #include "llama.cpp/include/llama.h"
 #include "wrapper_utils.h"
 
-#include <nlohmann/json.hpp>
+// Upstream llama.cpp migrated `json_schema_to_grammar` from
+// `nlohmann::ordered_json` to `common_json` (see
+// common/json-schema-to-grammar.h — signature is now
+// `std::string json_schema_to_grammar(const common_json &, bool)`).
+// The nlohmann include stays for its parser API used elsewhere;
+// the schema handoff routes through common_json::parse.
+#include "llama.cpp/common/json.h"
 
 extern "C" llama_rs_status llama_rs_json_schema_to_grammar(
     const char * schema_json,
@@ -27,7 +33,7 @@ extern "C" llama_rs_status llama_rs_json_schema_to_grammar(
 
     *out_grammar = nullptr;
     try {
-        const auto schema = nlohmann::ordered_json::parse(schema_json);
+        const auto schema = common_json::parse(schema_json);
         const auto grammar = json_schema_to_grammar(schema, force_gbnf);
         *out_grammar = llama_rs_dup_string(grammar);
         return *out_grammar ? LLAMA_RS_STATUS_OK : LLAMA_RS_STATUS_ALLOCATION_FAILED;
@@ -143,6 +149,13 @@ extern "C" int llama_rs_fit_params(
         tensor_buft_overrides,
         margins,
         n_ctx_min,
+        // Upstream llama.cpp added `const common_fit_extra_model *
+        // extra` between `n_ctx_min` and `log_level` around late
+        // 2026.  wrapper_common.cpp doesn't expose the extra-model
+        // hook; pass nullptr to keep the shim API stable.  When
+        // the shim gains a corresponding surface, this becomes
+        // another wrapper argument.
+        nullptr,
         log_level));
 }
 

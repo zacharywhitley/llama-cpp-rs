@@ -10,6 +10,19 @@ use std::ptr::null;
 
 pub mod kv_overrides;
 
+/// Combine legacy `use_mmap` + `use_mlock` bools into upstream's
+/// `llama_load_mode` enum value.  DIRECT_IO isn't reachable from
+/// the two-bool surface; a caller who wants direct-IO sets
+/// `load_mode` on the raw params struct directly.
+fn load_mode_for(use_mmap: bool, use_mlock: bool) -> llama_cpp_sys_2::llama_load_mode {
+    match (use_mmap, use_mlock) {
+        (true, true) => llama_cpp_sys_2::LLAMA_LOAD_MODE_MMAP_MLOCK,
+        (true, false) => llama_cpp_sys_2::LLAMA_LOAD_MODE_MMAP,
+        (false, true) => llama_cpp_sys_2::LLAMA_LOAD_MODE_MLOCK,
+        (false, false) => llama_cpp_sys_2::LLAMA_LOAD_MODE_NONE,
+    }
+}
+
 /// Result of [`LlamaModelParams::fit_params`], containing the fitted context size.
 #[cfg(feature = "common")]
 #[derive(Debug, Clone)]
@@ -444,16 +457,36 @@ impl LlamaModelParams {
         self.params.vocab_only
     }
 
-    /// use mmap if possible
+    /// use mmap if possible.
+    ///
+    /// Upstream llama.cpp replaced the boolean `use_mmap` field
+    /// with a `load_mode` enum (`LLAMA_LOAD_MODE_{NONE, MMAP,
+    /// MLOCK, MMAP_MLOCK, DIRECT_IO, AUTO}`).  This accessor
+    /// preserves the legacy boolean surface by projecting through
+    /// the enum: `true` when `load_mode` is `MMAP` or
+    /// `MMAP_MLOCK`, and by convention also `true` for `AUTO`
+    /// (upstream's default, which prefers mmap when available).
     #[must_use]
     pub fn use_mmap(&self) -> bool {
-        self.params.use_mmap
+        matches!(
+            self.params.load_mode,
+            llama_cpp_sys_2::LLAMA_LOAD_MODE_MMAP
+                | llama_cpp_sys_2::LLAMA_LOAD_MODE_MMAP_MLOCK
+                | llama_cpp_sys_2::LLAMA_LOAD_MODE_AUTO
+        )
     }
 
-    /// force system to keep model in RAM
+    /// force system to keep model in RAM.
+    ///
+    /// See [`Self::use_mmap`] for the load_mode projection notes;
+    /// this reads `true` for `MLOCK` or `MMAP_MLOCK`.
     #[must_use]
     pub fn use_mlock(&self) -> bool {
-        self.params.use_mlock
+        matches!(
+            self.params.load_mode,
+            llama_cpp_sys_2::LLAMA_LOAD_MODE_MLOCK
+                | llama_cpp_sys_2::LLAMA_LOAD_MODE_MMAP_MLOCK
+        )
     }
 
     /// get the split mode
@@ -520,17 +553,21 @@ impl LlamaModelParams {
         self
     }
 
-    /// sets `use_mmap`
+    /// sets `use_mmap`.  See [`Self::use_mmap`] for the
+    /// load_mode-projection notes; setting this combines with
+    /// the current mlock state to pick one of the four
+    /// non-DIRECT_IO load_mode values.
     #[must_use]
     pub fn with_use_mmap(mut self, use_mmap: bool) -> Self {
-        self.params.use_mmap = use_mmap;
+        self.params.load_mode = load_mode_for(use_mmap, self.use_mlock());
         self
     }
 
-    /// sets `use_mlock`
+    /// sets `use_mlock`.  See [`Self::use_mmap`] for the
+    /// load_mode-projection notes.
     #[must_use]
     pub fn with_use_mlock(mut self, use_mlock: bool) -> Self {
-        self.params.use_mlock = use_mlock;
+        self.params.load_mode = load_mode_for(self.use_mmap(), use_mlock);
         self
     }
 

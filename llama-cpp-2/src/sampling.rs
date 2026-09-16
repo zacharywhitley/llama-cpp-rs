@@ -507,16 +507,13 @@ impl LlamaSampler {
         let mut seq_breaker_pointers: Vec<*const c_char> =
             seq_breakers.iter().map(|s| s.as_ptr()).collect();
 
-        // NOTE(cognition 2026-09-15): modern llama.cpp signature
-        // added `n_ctx_train` as arg 2 (used only for the
-        // penalty-last-n=-1 sentinel path).  Feed the model's
-        // trained context length; the field has been stable
-        // across llama.cpp versions.
-        let n_ctx_train = i32::try_from(model.n_ctx_train()).unwrap_or(i32::MAX);
+        // NOTE(cognition 2026-09-16): modern llama.cpp dropped
+        // the `n_ctx_train` argument that a mid-2026 revision had
+        // briefly added.  Signature is back to 7 args: vocab +
+        // 4 tuning params + seq-breakers ptr/len.
         let sampler = unsafe {
             llama_cpp_sys_2::llama_sampler_init_dry(
                 model.vocab_ptr(),
-                n_ctx_train,
                 multiplier,
                 base,
                 allowed_length,
@@ -537,19 +534,25 @@ impl LlamaSampler {
     /// - ``penalty_freq``: must be finite, 0.0 = disabled
     /// - ``penalty_present``: must be finite, 0.0 = disabled
     ///
-    /// NOTE(cognition 2026-09-15): modern llama.cpp dropped the
-    /// leading `n_vocab` arg (the sampler reads vocab from the
-    /// context internally now).  Signature matches the modern
-    /// FFI 1:1.
+    /// NOTE(cognition 2026-09-16): modern llama.cpp brought
+    /// back the leading `n_vocab` argument the earlier revision
+    /// had dropped — the sampler now sizes its per-token count
+    /// buffer from the caller rather than reading it from
+    /// context.  Signature is 5 args (n_vocab + 4 tuning
+    /// params); take a `&LlamaModel` so the caller doesn't have
+    /// to pass raw vocab counts.
     #[must_use]
     pub fn penalties(
+        model: &crate::model::LlamaModel,
         penalty_last_n: i32,
         penalty_repeat: f32,
         penalty_freq: f32,
         penalty_present: f32,
     ) -> Self {
+        let n_vocab = i32::try_from(model.n_vocab()).unwrap_or(i32::MAX);
         let sampler = unsafe {
             llama_cpp_sys_2::llama_sampler_init_penalties(
+                n_vocab,
                 penalty_last_n,
                 penalty_repeat,
                 penalty_freq,
