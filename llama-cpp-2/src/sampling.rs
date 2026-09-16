@@ -507,9 +507,16 @@ impl LlamaSampler {
         let mut seq_breaker_pointers: Vec<*const c_char> =
             seq_breakers.iter().map(|s| s.as_ptr()).collect();
 
+        // NOTE(cognition 2026-09-15): modern llama.cpp signature
+        // added `n_ctx_train` as arg 2 (used only for the
+        // penalty-last-n=-1 sentinel path).  Feed the model's
+        // trained context length; the field has been stable
+        // across llama.cpp versions.
+        let n_ctx_train = i32::try_from(model.n_ctx_train()).unwrap_or(i32::MAX);
         let sampler = unsafe {
             llama_cpp_sys_2::llama_sampler_init_dry(
                 model.vocab_ptr(),
+                n_ctx_train,
                 multiplier,
                 base,
                 allowed_length,
@@ -524,16 +531,18 @@ impl LlamaSampler {
     /// Penalizes tokens for being present in the context.
     ///
     /// Parameters:
-    /// - ``n_vocab``: [`LlamaModel::n_vocab`]
     /// - ``penalty_last_n``: last n tokens to penalize (0 = disable penalty). Negative values are
     ///   clamped to 0; they no longer select the context size.
     /// - ``penalty_repeat``: must be > 0.0, 1.0 = disabled
     /// - ``penalty_freq``: must be finite, 0.0 = disabled
     /// - ``penalty_present``: must be finite, 0.0 = disabled
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// NOTE(cognition 2026-09-15): modern llama.cpp dropped the
+    /// leading `n_vocab` arg (the sampler reads vocab from the
+    /// context internally now).  Signature matches the modern
+    /// FFI 1:1.
     #[must_use]
     pub fn penalties(
-        n_vocab: i32,
         penalty_last_n: i32,
         penalty_repeat: f32,
         penalty_freq: f32,
@@ -541,7 +550,6 @@ impl LlamaSampler {
     ) -> Self {
         let sampler = unsafe {
             llama_cpp_sys_2::llama_sampler_init_penalties(
-                n_vocab,
                 penalty_last_n,
                 penalty_repeat,
                 penalty_freq,

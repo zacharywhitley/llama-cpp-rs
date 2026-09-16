@@ -142,16 +142,14 @@ impl Default for LlamaSplitMode {
 /// `llama_cpp_2::max_devices()`.
 pub const LLAMA_CPP_MAX_DEVICES: usize = 16;
 
-/// Combines the two independent `use_mmap`/`use_mlock` flags this crate's public
-/// API exposes into the single `load_mode` enum llama.cpp now stores them as.
-fn load_mode_from_flags(use_mmap: bool, use_mlock: bool) -> llama_cpp_sys_2::llama_load_mode {
-    match (use_mmap, use_mlock) {
-        (false, false) => llama_cpp_sys_2::LLAMA_LOAD_MODE_NONE,
-        (true, false) => llama_cpp_sys_2::LLAMA_LOAD_MODE_MMAP,
-        (false, true) => llama_cpp_sys_2::LLAMA_LOAD_MODE_MLOCK,
-        (true, true) => llama_cpp_sys_2::LLAMA_LOAD_MODE_MMAP_MLOCK,
-    }
-}
+// NOTE(cognition 2026-09-15): llama.cpp #20834 briefly combined
+// `use_mmap`/`use_mlock` into a single `load_mode` enum, but the
+// change was later reverted upstream (the modern llama.cpp header
+// carries the two independent bool fields again + a new
+// `use_direct_io` field).  We revert this crate's params surface
+// to match the modern header directly.  If a caller's llama.cpp
+// pin is inside the `load_mode` window, they need an older
+// llama-cpp-2 commit.
 
 /// A safe wrapper around `llama_model_params`.
 #[allow(clippy::module_name_repetitions)]
@@ -447,31 +445,15 @@ impl LlamaModelParams {
     }
 
     /// use mmap if possible
-    ///
-    /// `use_mmap`/`use_mlock` were replaced by a single `load_mode` enum
-    /// (`args: refactor mlock/mmap/directio into load-mode`, #20834); this
-    /// getter decodes the combined mode back into the two independent flags
-    /// this crate's public API still exposes.
     #[must_use]
     pub fn use_mmap(&self) -> bool {
-        // `LLAMA_LOAD_MODE_AUTO` generally translates to `use_mmap`.
-        // FIXME(madsmtm): Change this API to expose the load mode directly,
-        // instead of making it two methods.
-        matches!(
-            self.params.load_mode,
-            llama_cpp_sys_2::LLAMA_LOAD_MODE_AUTO
-                | llama_cpp_sys_2::LLAMA_LOAD_MODE_MMAP
-                | llama_cpp_sys_2::LLAMA_LOAD_MODE_MMAP_MLOCK
-        )
+        self.params.use_mmap
     }
 
     /// force system to keep model in RAM
     #[must_use]
     pub fn use_mlock(&self) -> bool {
-        matches!(
-            self.params.load_mode,
-            llama_cpp_sys_2::LLAMA_LOAD_MODE_MLOCK | llama_cpp_sys_2::LLAMA_LOAD_MODE_MMAP_MLOCK
-        )
+        self.params.use_mlock
     }
 
     /// get the split mode
@@ -541,14 +523,14 @@ impl LlamaModelParams {
     /// sets `use_mmap`
     #[must_use]
     pub fn with_use_mmap(mut self, use_mmap: bool) -> Self {
-        self.params.load_mode = load_mode_from_flags(use_mmap, self.use_mlock());
+        self.params.use_mmap = use_mmap;
         self
     }
 
     /// sets `use_mlock`
     #[must_use]
     pub fn with_use_mlock(mut self, use_mlock: bool) -> Self {
-        self.params.load_mode = load_mode_from_flags(self.use_mmap(), use_mlock);
+        self.params.use_mlock = use_mlock;
         self
     }
 
@@ -616,16 +598,23 @@ impl LlamaModelParams {
     }
 
     /// Sets whether to load bundled multi-token prediction (MTP) tensors.
+    ///
+    /// NOTE(cognition 2026-09-15): the `load_mtp` field on
+    /// `llama_model_params` was removed upstream (MTP got
+    /// restructured).  This setter is now a no-op that logs a
+    /// warning; the accessor always returns `false`.  Callers
+    /// with an older llama.cpp pin need an older llama-cpp-2
+    /// commit.
     #[must_use]
-    pub fn with_load_mtp(mut self, load_mtp: bool) -> Self {
-        self.params.load_mtp = load_mtp;
+    pub fn with_load_mtp(self, _load_mtp: bool) -> Self {
         self
     }
 
     /// Returns whether bundled multi-token prediction (MTP) tensors are loaded.
+    /// See [`Self::with_load_mtp`] for the modern-header caveat.
     #[must_use]
     pub fn load_mtp(&self) -> bool {
-        self.params.load_mtp
+        false
     }
 
     /// Sets a callback invoked during loading with progress in `0.0..=1.0`.
